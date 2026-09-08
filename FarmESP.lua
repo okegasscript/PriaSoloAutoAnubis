@@ -1,13 +1,13 @@
--- ============================================================
--- FarmESP.lua - Menampilkan jumlah mutasi untuk SETIAP buah
--- ============================================================
+-- FarmESP.lua - ESP untuk menampilkan jumlah mutasi SETIAP BUAH
 local FarmESP = {}
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- Daftar mutasi resmi
+-- ============================================================
+-- MUTASI RESMI
+-- ============================================================
 local officialMutations = {}
 local function loadMutations()
     local Modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -23,12 +23,41 @@ local function loadMutations()
             end
         end
     end
-    -- fallback hardcode (contoh kecil)
-    local fallback = {"Wet","Shiny","Gold","Shocked","Windstruck","Dawnbound","Beanbound","Twisted","Cloudtouched","Voidtouched"}
+    -- fallback hardcode
+    local fallback = {
+        "Shocked","Windstruck","Dawnbound","Beanbound","Twisted","Cloudtouched","Voidtouched",
+        "Wet","Fried","Molten","Vamp","Moonbled","Moist","Crystalized","Alienated","Brewed",
+        "Ghostly","Spooky","Volcanic","Slashbound","Sliced","Severed","Alienlike","Galactic",
+        "Drenched","Aurora","Chilled","Sundried","Wiltproof","Verdant","Paradisal","Glitched",
+        "Gilded","Glimmering","Luminous","Cracked","Enchanted","Frozen","Disco","Choc","Plasma",
+        "Heavenly","Burnt","Cooked","Sizzled","Gourmet","Moonlit","Moonbeam","Heartstruck","Luck",
+        "Bloodlit","Peppermint","Zombified","Celestial","Meteoric","HoneyGlazed","Pollinated",
+        "Amber","OldAmber","AncientAmber","Sandy","Clay","Ceramic","Friendbound","Tempestuous",
+        "Infected","Radioactive","Chakra","FoxfireChakra","Cute","Heartbound","CorruptChakra",
+        "CorruptFoxfireChakra","AscendedChakra","Static","HarmonisedChakra","HarmonisedFoxfireChakra",
+        "Pasta","Sauce","Meatball","Spaghetti","Eclipsed","Enlightened","Tranquil","Corrupt",
+        "Toxic","Acidic","Corrosive","Flaming","Blazing","Infernal","Goldsparkle","Oil","Boil",
+        "OilBoil","Fortune","Bloom","Rot","Gloom","Blight","Pestilent","Umbral","Shadowbound",
+        "Necrotic","Cyclonic","Maelstrom","Stormcharged","Cosmic","Webbed","Astral","Abyssal",
+        "Graceful","Jackpot","Plagued","Biohazard","Contagion","Blitzshock","Junkshock","Touchdown",
+        "Subzero","Lightcycle","Brainrot","Warped","Azure","Terran","Aromatic","Gnomed","Fall",
+        "Blackout","Wilted","Withered","Desolate","Batty","Glossy","Leeched","Lush","Nocturnal",
+        "Arid","Mirage","Stampede","Monsoon","Twilight","Typhoon","Wildfast","Tempered","Charcoal",
+        "Geode","Supernatural","Stormbound","SunScorched","Riptide","Grim","Extraterrestrial","Mineral",
+        "MindBender","Affluent","Fractured","Coin","Arctic","Ornamented","Glacial","Snowtouched",
+        "Snowy","Eggnog","Blizzard","Opulent","Gale","Sleepy","Firework","Fiery","Fierywork",
+        "Whalebound","Festive","Clockwork","Whimsical","Ash","Haze","Smoldering","Gummy","Floral",
+        "Blossoming","Candy","Confection","Spotty","Pollinated_Poor","Pollinated_Fair","Pollinated_Good",
+        "Pollinated_Godly","Honeygem","Jellygem","Resplendent","Sylvan","Ember","Shadow","Tidal",
+        "Dream","Nightmare"
+    }
     for _, name in ipairs(fallback) do officialMutations[name] = true end
 end
 loadMutations()
 
+-- ============================================================
+-- ESP MANAGEMENT
+-- ============================================================
 local espFolder = nil
 local espObjects = {}
 local connection = nil
@@ -41,7 +70,6 @@ local function getPlantsPhysical()
     return p
 end
 
--- Fungsi mengumpulkan mutasi dari atribut true pada objek
 local function collectMutations(obj)
     local muts = {}
     for k, v in pairs(obj:GetAttributes()) do
@@ -52,7 +80,7 @@ local function collectMutations(obj)
     return muts
 end
 
--- Fungsi scan: untuk setiap tanaman, jika ada Fruits, scan semua anak di Fruits
+-- Scan SETIAP buah di setiap pohon
 local function scanAllPlants()
     local plantsPhysical = getPlantsPhysical()
     if not plantsPhysical then return {} end
@@ -63,11 +91,10 @@ local function scanAllPlants()
     for _, plantFolder in ipairs(plantsPhysical:GetChildren()) do
         local fruitsFolder = plantFolder:FindFirstChild("Fruits")
         if fruitsFolder then
-            -- Multi-fruit: loop setiap buah di folder Fruits
+            -- MULTI FRUIT: loop setiap buah
             for _, fruit in ipairs(fruitsFolder:GetChildren()) do
                 if fruit:IsA("BasePart") or fruit:IsA("Model") or fruit:IsA("Folder") then
                     index = index + 1
-                    -- Kumpulkan mutasi dari fruit dan descendants
                     local muts = collectMutations(fruit)
                     for _, desc in ipairs(fruit:GetDescendants()) do
                         for k, v in pairs(desc:GetAttributes()) do
@@ -79,7 +106,6 @@ local function scanAllPlants()
                     local mutCount = 0
                     for _ in pairs(muts) do mutCount = mutCount + 1 end
 
-                    -- Cari posisi
                     local part = fruit:IsA("BasePart") and fruit or fruit:FindFirstChildWhichIsA("BasePart")
                     if not part then
                         for _, desc in ipairs(fruit:GetDescendants()) do
@@ -87,8 +113,6 @@ local function scanAllPlants()
                         end
                     end
                     local position = part and part.Position or fruit:GetPivot().Position
-
-                    -- Buat UUID unik per buah
                     local uuid = fruit:GetAttribute("OBJECT_UUID") or fruit:GetAttribute("UUID") or plantFolder.Name .. "_fruit_" .. index
 
                     table.insert(plantList, {
@@ -100,7 +124,7 @@ local function scanAllPlants()
                 end
             end
         else
-            -- Single fruit: ambil tanaman itu sendiri
+            -- SINGLE FRUIT: tanaman itu sendiri
             local target = plantFolder
             local muts = collectMutations(target)
             for _, desc in ipairs(target:GetDescendants()) do
@@ -120,7 +144,7 @@ local function scanAllPlants()
                 end
             end
             local position = part and part.Position or target:GetPivot().Position
-            local uuid = target:GetAttribute("UUID") or target:GetAttribute("OBJECT_UUID") or plantFolder.Name
+            local uuid = target:GetAttribute("OBJECT_UUID") or target:GetAttribute("UUID") or plantFolder.Name
 
             table.insert(plantList, {
                 name = plantFolder.Name,
@@ -134,7 +158,6 @@ local function scanAllPlants()
     return plantList
 end
 
--- ESP Management (sama seperti sebelumnya)
 local function createESP(data)
     if not espFolder then
         espFolder = Instance.new("Folder")
@@ -161,10 +184,10 @@ local function createESP(data)
     label.Size = UDim2.new(1, 0, 1, 0)
     label.BackgroundTransparency = 1
     label.Text = string.format("%s: %d", data.name, data.mutCount)
-    label.TextColor3 = Color3.fromRGB(255,255,255)
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
     label.TextSize = 18
     label.Font = Enum.Font.SourceSansBold
-    label.TextStrokeColor3 = Color3.new(0,0,0)
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
     label.TextStrokeTransparency = 0
     label.Parent = bill
 
@@ -176,7 +199,6 @@ local function updateESP()
     local current = {}
     for _, p in ipairs(plants) do current[p.uuid] = p end
 
-    -- remove stale
     for uuid, obj in pairs(espObjects) do
         if not current[uuid] then
             obj.part:Destroy()
@@ -185,7 +207,6 @@ local function updateESP()
         end
     end
 
-    -- add/update
     for uuid, data in pairs(current) do
         local obj = espObjects[uuid]
         if not obj then
@@ -198,7 +219,9 @@ local function updateESP()
     end
 end
 
--- Public methods
+-- ============================================================
+-- PUBLIC METHODS
+-- ============================================================
 function FarmESP.start()
     if connection then return end
     updateESP()
