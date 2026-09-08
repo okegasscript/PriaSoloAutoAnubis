@@ -1,6 +1,5 @@
 -- ============================================================
--- FarmESP.lua
--- Modul ESP untuk menampilkan jumlah mutasi di atas tanaman
+-- FarmESP.lua - Menampilkan jumlah mutasi untuk SETIAP buah
 -- ============================================================
 local FarmESP = {}
 
@@ -8,7 +7,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- Daftar mutasi resmi (hardcode + dari MutationHandler)
+-- Daftar mutasi resmi
 local officialMutations = {}
 local function loadMutations()
     local Modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -24,7 +23,7 @@ local function loadMutations()
             end
         end
     end
-    -- fallback hardcode (daftar panjang disingkat, Anda bisa tambahkan sendiri)
+    -- fallback hardcode (contoh kecil)
     local fallback = {"Wet","Shiny","Gold","Shocked","Windstruck","Dawnbound","Beanbound","Twisted","Cloudtouched","Voidtouched"}
     for _, name in ipairs(fallback) do officialMutations[name] = true end
 end
@@ -42,19 +41,7 @@ local function getPlantsPhysical()
     return p
 end
 
-local function getTarget(folder)
-    local fruits = folder:FindFirstChild("Fruits")
-    if fruits then
-        local t = fruits:FindFirstChild(folder.Name)
-        if not t then
-            local children = fruits:GetChildren()
-            if #children > 0 then t = children[1] end
-        end
-        return t
-    end
-    return folder
-end
-
+-- Fungsi mengumpulkan mutasi dari atribut true pada objek
 local function collectMutations(obj)
     local muts = {}
     for k, v in pairs(obj:GetAttributes()) do
@@ -65,44 +52,89 @@ local function collectMutations(obj)
     return muts
 end
 
-local function scanPlants()
-    local plants = getPlantsPhysical()
-    if not plants then return {} end
+-- Fungsi scan: untuk setiap tanaman, jika ada Fruits, scan semua anak di Fruits
+local function scanAllPlants()
+    local plantsPhysical = getPlantsPhysical()
+    if not plantsPhysical then return {} end
 
-    local list = {}
-    for _, folder in ipairs(plants:GetChildren()) do
-        local target = getTarget(folder)
-        if target then
+    local plantList = {}
+    local index = 0
+
+    for _, plantFolder in ipairs(plantsPhysical:GetChildren()) do
+        local fruitsFolder = plantFolder:FindFirstChild("Fruits")
+        if fruitsFolder then
+            -- Multi-fruit: loop setiap buah di folder Fruits
+            for _, fruit in ipairs(fruitsFolder:GetChildren()) do
+                if fruit:IsA("BasePart") or fruit:IsA("Model") or fruit:IsA("Folder") then
+                    index = index + 1
+                    -- Kumpulkan mutasi dari fruit dan descendants
+                    local muts = collectMutations(fruit)
+                    for _, desc in ipairs(fruit:GetDescendants()) do
+                        for k, v in pairs(desc:GetAttributes()) do
+                            if v == true and officialMutations[k] then
+                                muts[k] = true
+                            end
+                        end
+                    end
+                    local mutCount = 0
+                    for _ in pairs(muts) do mutCount = mutCount + 1 end
+
+                    -- Cari posisi
+                    local part = fruit:IsA("BasePart") and fruit or fruit:FindFirstChildWhichIsA("BasePart")
+                    if not part then
+                        for _, desc in ipairs(fruit:GetDescendants()) do
+                            if desc:IsA("BasePart") then part = desc; break end
+                        end
+                    end
+                    local position = part and part.Position or fruit:GetPivot().Position
+
+                    -- Buat UUID unik per buah
+                    local uuid = fruit:GetAttribute("OBJECT_UUID") or fruit:GetAttribute("UUID") or plantFolder.Name .. "_fruit_" .. index
+
+                    table.insert(plantList, {
+                        name = plantFolder.Name .. " #" .. index,
+                        mutCount = mutCount,
+                        position = position,
+                        uuid = uuid,
+                    })
+                end
+            end
+        else
+            -- Single fruit: ambil tanaman itu sendiri
+            local target = plantFolder
             local muts = collectMutations(target)
-            for _, d in ipairs(target:GetDescendants()) do
-                for k, v in pairs(d:GetAttributes()) do
+            for _, desc in ipairs(target:GetDescendants()) do
+                for k, v in pairs(desc:GetAttributes()) do
                     if v == true and officialMutations[k] then
                         muts[k] = true
                     end
                 end
             end
-            local count = 0
-            for _ in pairs(muts) do count = count + 1 end
+            local mutCount = 0
+            for _ in pairs(muts) do mutCount = mutCount + 1 end
 
             local part = target:IsA("BasePart") and target or target:FindFirstChildWhichIsA("BasePart")
             if not part then
-                for _, d in ipairs(target:GetDescendants()) do
-                    if d:IsA("BasePart") then part = d; break end
+                for _, desc in ipairs(target:GetDescendants()) do
+                    if desc:IsA("BasePart") then part = desc; break end
                 end
             end
-            local pos = part and part.Position or target:GetPivot().Position
+            local position = part and part.Position or target:GetPivot().Position
+            local uuid = target:GetAttribute("UUID") or target:GetAttribute("OBJECT_UUID") or plantFolder.Name
 
-            table.insert(list, {
-                name = folder.Name,
-                mutCount = count,
-                position = pos,
-                uuid = target:GetAttribute("UUID") or target:GetAttribute("OBJECT_UUID") or tostring(target)
+            table.insert(plantList, {
+                name = plantFolder.Name,
+                mutCount = mutCount,
+                position = position,
+                uuid = uuid,
             })
         end
     end
-    return list
+
+    return plantList
 end
 
+-- ESP Management (sama seperti sebelumnya)
 local function createESP(data)
     if not espFolder then
         espFolder = Instance.new("Folder")
@@ -130,17 +162,17 @@ local function createESP(data)
     label.BackgroundTransparency = 1
     label.Text = string.format("%s: %d", data.name, data.mutCount)
     label.TextColor3 = Color3.fromRGB(255,255,255)
-    label.TextSize = 20
+    label.TextSize = 18
     label.Font = Enum.Font.SourceSansBold
     label.TextStrokeColor3 = Color3.new(0,0,0)
     label.TextStrokeTransparency = 0
     label.Parent = bill
 
     return { part = part, bill = bill, label = label, uuid = data.uuid }
-end
+}
 
 local function updateESP()
-    local plants = scanPlants()
+    local plants = scanAllPlants()
     local current = {}
     for _, p in ipairs(plants) do current[p.uuid] = p end
 
@@ -166,10 +198,7 @@ local function updateESP()
     end
 end
 
--- ============================================================
--- PUBLIC METHODS
--- ============================================================
-
+-- Public methods
 function FarmESP.start()
     if connection then return end
     updateESP()
