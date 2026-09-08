@@ -5,9 +5,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- ============================================================
--- MUTASI RESMI
--- ============================================================
+-- Daftar mutasi resmi (hardcode + dari MutationHandler)
 local officialMutations = {}
 local function loadMutations()
     local Modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -23,8 +21,8 @@ local function loadMutations()
             end
         end
     end
-    -- fallback hardcode
-    local fallback = {
+    -- fallback hardcode (daftar lengkap)
+    local hardcoded = {
         "Shocked","Windstruck","Dawnbound","Beanbound","Twisted","Cloudtouched","Voidtouched",
         "Wet","Fried","Molten","Vamp","Moonbled","Moist","Crystalized","Alienated","Brewed",
         "Ghostly","Spooky","Volcanic","Slashbound","Sliced","Severed","Alienlike","Galactic",
@@ -51,7 +49,9 @@ local function loadMutations()
         "Pollinated_Godly","Honeygem","Jellygem","Resplendent","Sylvan","Ember","Shadow","Tidal",
         "Dream","Nightmare"
     }
-    for _, name in ipairs(fallback) do officialMutations[name] = true end
+    for _, name in ipairs(hardcoded) do
+        officialMutations[name] = true
+    end
 end
 loadMutations()
 
@@ -80,7 +80,7 @@ local function collectMutations(obj)
     return muts
 end
 
--- Scan SETIAP buah di setiap pohon
+-- Scan SETIAP buah
 local function scanAllPlants()
     local plantsPhysical = getPlantsPhysical()
     if not plantsPhysical then return {} end
@@ -91,7 +91,7 @@ local function scanAllPlants()
     for _, plantFolder in ipairs(plantsPhysical:GetChildren()) do
         local fruitsFolder = plantFolder:FindFirstChild("Fruits")
         if fruitsFolder then
-            -- MULTI FRUIT: loop setiap buah
+            -- MULTI FRUIT
             for _, fruit in ipairs(fruitsFolder:GetChildren()) do
                 if fruit:IsA("BasePart") or fruit:IsA("Model") or fruit:IsA("Folder") then
                     index = index + 1
@@ -124,7 +124,7 @@ local function scanAllPlants()
                 end
             end
         else
-            -- SINGLE FRUIT: tanaman itu sendiri
+            -- SINGLE FRUIT
             local target = plantFolder
             local muts = collectMutations(target)
             for _, desc in ipairs(target:GetDescendants()) do
