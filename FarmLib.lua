@@ -1,7 +1,4 @@
--- ============================================================
--- FarmLib.lua
--- Modul untuk aktivitas bertani: collect, favorite, plant
--- ============================================================
+-- FarmLib.lua - Modul fungsi utama untuk bertani
 local FarmLib = {}
 
 local Players = game:GetService("Players")
@@ -9,7 +6,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- ============================================================
--- BANTUAN INTERNAL
+-- INTERNAL HELPER FUNCTIONS
 -- ============================================================
 local function findTool(pattern)
     local player = Players.LocalPlayer
@@ -89,9 +86,10 @@ local function getTarget(folder)
 end
 
 -- ============================================================
--- FUNGSI 1: COLLECT
+-- PUBLIC FUNCTIONS
 -- ============================================================
--- config = { minMutations, maxMutations, mutationName, autoCollect, delay }
+
+-- 1. Collect fruits by mutation count
 function FarmLib.collectFruits(config)
     config = config or {}
     local minM = config.minMutations or 1
@@ -130,25 +128,19 @@ function FarmLib.collectFruits(config)
         end
     end
 
-    print("🔍 Found " .. #targets .. " matching plants.")
     if not auto then
         for _, t in ipairs(targets) do print("  " .. t.name .. " (mut: " .. t.mutCount .. ")") end
         return targets
     end
 
-    print("🔄 Collecting...")
     for _, t in ipairs(targets) do
-        print("  " .. t.name)
         remote:FireServer({ t.obj })
         task.wait(delay)
     end
-    print("✅ Done.")
     return targets
 end
 
--- ============================================================
--- FUNGSI 2: FAV / UNFAV
--- ============================================================
+-- 2. Favorite / Unfavorite based on mutation threshold
 function FarmLib.favoriteFruits(config)
     config = config or {}
     local threshold = config.threshold or 90
@@ -157,7 +149,6 @@ function FarmLib.favoriteFruits(config)
 
     local tool, loc = findTool("Favorite Tool")
     if not tool then warn("❌ Favorite Tool not found"); return {} end
-    print("✅ Favorite Tool at:", loc)
     if not equipTool(tool) then warn("❌ Equip failed"); return {} end
 
     local remote = ReplicatedStorage:FindFirstChild("GameEvents") and ReplicatedStorage.GameEvents:FindFirstChild("FavoriteToolRemote")
@@ -184,17 +175,14 @@ function FarmLib.favoriteFruits(config)
     end
 
     if not auto then
-        print("🔍 Scan results:")
         for _, r in ipairs(results) do
             print(string.format("  %s: %d → %s", r.name, r.mutCount, r.shouldFav and "FAV" or "UNFAV"))
         end
         return results
     end
 
-    print("🔄 Executing FAV/UNFAV...")
     local fav, unfav = 0, 0
     for _, r in ipairs(results) do
-        print(string.format("  %s: %d → %s", r.name, r.mutCount, r.shouldFav and "FAV" or "UNFAV"))
         local ok, err = pcall(function()
             remote:InvokeServer(tool, r.obj, r.shouldFav)
         end)
@@ -205,13 +193,10 @@ function FarmLib.favoriteFruits(config)
         end
         task.wait(delay)
     end
-    print("✅ Done. FAV:", fav, "UNFAV:", unfav)
     return results
 end
 
--- ============================================================
--- FUNGSI 3: TANAM
--- ============================================================
+-- 3. Plant seeds in a row
 function FarmLib.plantSeeds(config)
     config = config or {}
     local seedName = config.seedName or "Carrot"
@@ -222,7 +207,6 @@ function FarmLib.plantSeeds(config)
 
     local tool, loc = findTool(seedName .. " Seed")
     if not tool then warn("❌ " .. seedName .. " Seed not found"); return false end
-    print("✅ Seed at:", loc)
     if not equipTool(tool) then warn("❌ Equip failed"); return false end
 
     local remote = ReplicatedStorage:FindFirstChild("GameEvents") and ReplicatedStorage.GameEvents:FindFirstChild("Plant_RE")
@@ -237,12 +221,6 @@ function FarmLib.plantSeeds(config)
         end
     end
 
-    print("📍 Planting positions:")
-    for i, p in ipairs(positions) do
-        print(string.format("  %d. (%.2f, %.2f, %.2f)", i, p.X, p.Y, p.Z))
-    end
-
-    print("🌱 Planting " .. count .. " " .. seedName .. "...")
     local success = 0
     for i, p in ipairs(positions) do
         local ok, err = pcall(function()
@@ -250,13 +228,12 @@ function FarmLib.plantSeeds(config)
         end)
         if ok then
             success = success + 1
-            print(string.format("  ✅ %d success", i))
         else
-            warn(string.format("  ❌ %d failed: %s", i, err))
+            warn(string.format("  ❌ Plant %d failed: %s", i, err))
         end
         task.wait(0.3)
     end
-    print("✅ Done. Success: " .. success .. "/" .. count)
+    print("✅ Planted " .. success .. "/" .. count)
     return true
 end
 
