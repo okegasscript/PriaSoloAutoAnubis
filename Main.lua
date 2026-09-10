@@ -1516,7 +1516,21 @@ function startLeveling()
                         equipPetListTogether(anubisAndTarget)
 
                         local anubisStartTime = tick()
+                        local reachedDuringAnubis = false
                         while isLevelingRunning do
+                            -- FIX: cek level target secara berkala SAAT masih di-equip
+                            -- dengan tim Anubis. Begitu level yang diinginkan sudah
+                            -- tercapai, LANGSUNG berhenti menunggu (tidak perlu tunggu
+                            -- semua buah <= 10 mutasi atau timeout 1 menit dulu).
+                            local petDataDuringAnubis = getPetByUUID(targetUUID)
+                            local levelDuringAnubis = petDataDuringAnubis and (petDataDuringAnubis.level or 0) or currentLevel
+                            if levelDuringAnubis >= targetLevel then
+                                currentLevel = levelDuringAnubis
+                                reachedDuringAnubis = true
+                                debugStep("Langkah 6: level target sudah tercapai (" .. levelDuringAnubis .. "/" .. targetLevel .. ") saat masih equip Anubis, langsung unequip & lanjut target berikutnya")
+                                break
+                            end
+
                             local remaining = countFruitsOnTreeWithMutationAbove(tree, 10, favoritedFruitInstance)
                             if remaining <= 0 then
                                 debugStep("Langkah 6: semua buah di " .. tree .. " sudah <= 10 mutasi (kecuali favorit)")
@@ -1531,6 +1545,17 @@ function startLeveling()
 
                         unequipPetList(anubisAndTarget)
                         task.wait(0.5)
+
+                        if reachedDuringAnubis then
+                            debugStep("✅ Target level tercapai! (terdeteksi saat equip Anubis)")
+                            local elapsed = tick() - targetStartTime
+                            sendTargetReachedWebhook(currentWebhookUrl, getPetByUUID(targetUUID), targetUUID, targetLevel, elapsed)
+                            unequipPetByUUID(targetUUID)
+                            for _, uuid in ipairs(anubis) do
+                                unequipPetByUUID(uuid)
+                            end
+                            break
+                        end
 
                         -- ===== LANGKAH 7 =====
                         debugStep("Langkah 7: cek level target")
