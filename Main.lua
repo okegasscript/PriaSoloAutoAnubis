@@ -467,6 +467,7 @@ local currentTargetLevel = 500
 local currentMutationCount = 1
 local currentCollectThreshold = 10
 local currentESPEnabled = false
+local currentWebhookUrl = ""
 
 -- ============================================================
 -- 6. TAB AUTO LEVELING
@@ -730,6 +731,18 @@ local collectThresholdInput = LevelingSection:Input({
     end
 })
 
+LevelingSection:Space()
+
+local webhookInput = LevelingSection:Input({
+    Title = "Webhook",
+    Value = "",
+    Placeholder = "https://discord.com/api/webhooks/...",
+    Flag = "webhook_url",
+    Callback = function(value)
+        currentWebhookUrl = tostring(value or "")
+    end
+})
+
 -- ============================================================
 -- 7. STATUS LABEL
 -- ============================================================
@@ -901,7 +914,13 @@ end
 --     - Buah dengan mutasi >= threshold (termasuk yang PERSIS = threshold) -> TIDAK dishovel
 --     - Hanya menyentuh buah pada 'treeName' (pohon lain tidak disentuh),
 --       karena scanFruitsOnTree(treeName) sudah memfilter per pohon
+--     - FIX: dibuat beberapa kali pass (scan ulang -> shovel ulang) supaya
+--       benar-benar tuntas untuk pohon dengan banyak buah (bisa sampai 40+
+--       tergantung jumlah spawn point), karena replikasi server bisa telat
+--       sehingga 1 pass saja kadang menyisakan buah yang belum ke-Destroy.
 -- ============================================================
+local SHOVEL_MAX_PASSES = 6
+
 local function shovelFruitsOnTree(treeName, threshold)
     if not RemoveItemRemote then
         warn("⚠️ Remove_Item remote tidak ditemukan.")
@@ -915,18 +934,25 @@ local function shovelFruitsOnTree(treeName, threshold)
     end
     debugStep("Langkah 2B: shovel di-equip")
 
-    local fruits = scanFruitsOnTree(treeName)
-    local toShovel = {}
-    for _, p in ipairs(fruits) do
-        if p.mutCount < threshold then
-            table.insert(toShovel, p.instance)
+    for pass = 1, SHOVEL_MAX_PASSES do
+        local fruits = scanFruitsOnTree(treeName)
+        local toShovel = {}
+        for _, p in ipairs(fruits) do
+            if p.mutCount < threshold then
+                table.insert(toShovel, p.instance)
+            end
         end
-    end
 
-    if #toShovel == 0 then
-        debugStep("Langkah 2B: tidak ada buah di " .. treeName .. " dengan mutasi < " .. threshold)
-    else
-        debugStep("Langkah 2B: menemukan " .. #toShovel .. " buah di " .. treeName .. " dengan mutasi < " .. threshold .. " (termasuk buah tanpa mutasi), mulai shovel...")
+        if #toShovel == 0 then
+            if pass == 1 then
+                debugStep("Langkah 2B: tidak ada buah di " .. treeName .. " dengan mutasi < " .. threshold)
+            else
+                debugStep("Langkah 2B: sudah bersih, semua buah di " .. treeName .. " dengan mutasi < " .. threshold .. " berhasil dishovel (pass " .. pass .. ")")
+            end
+            break
+        end
+
+        debugStep("Langkah 2B: pass " .. pass .. "/" .. SHOVEL_MAX_PASSES .. " - menemukan " .. #toShovel .. " buah di " .. treeName .. " dengan mutasi < " .. threshold .. " (termasuk buah tanpa mutasi), mulai shovel...")
         for i, fruit in ipairs(toShovel) do
             local ok, err = pcall(function()
                 RemoveItemRemote:FireServer(fruit)
@@ -938,7 +964,10 @@ local function shovelFruitsOnTree(treeName, threshold)
             end
             task.wait(0.3)
         end
-        debugStep("Langkah 2B: selesai shovel " .. #toShovel .. " buah, menyisakan buah dengan mutasi >= " .. threshold)
+        debugStep("Langkah 2B: selesai shovel " .. #toShovel .. " buah pada pass " .. pass .. ", menyisakan buah dengan mutasi >= " .. threshold)
+
+        -- beri waktu replikasi server sebelum verifikasi ulang pada pass berikutnya
+        task.wait(0.7)
     end
 
     local backpack = LocalPlayer:FindFirstChild("Backpack")
@@ -1102,6 +1131,100 @@ local NOTIF_TARGET_COUNT = 6
 local NOTIF_TIMEOUT_SECONDS = 60
 local SPIDER_WEB_WAVE_TARGET_COUNT = 7
 local SPIDER_WEB_WAVE_TIMEOUT_SECONDS = 120
+local ANUBIS_TIMEOUT_SECONDS = 60 -- Langkah 6: timeout tunggu Anubis diatur 1 menit
+
+-- ============================================================
+-- 8G0. WEBHOOK - kirim data saat target level tercapai
+-- Mencoba beberapa fungsi HTTP request yang umum disediakan
+-- executor (syn.request / http_request / request), fallback ke
+-- HttpService:PostAsync jika tidak ada satupun yang tersedia.
+-- ============================================================
+local HttpService = game:GetService("HttpService")
+
+local function sendWebhookRaw(webhookUrl, jsonBody)
+    if not webhookUrl or webhookUrl == "" then return false, "URL kosong" end
+
+    local ok, err = pcall(function()
+        if syn and syn.request then
+            syn.request({
+                Url = webhookUrl,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = jsonBody,
+            })
+        elseif http_request then
+            http_request({
+                Url = webhookUrl,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = jsonBody,
+            })
+        elseif request then
+            request({
+                Url = webhookUrl,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = jsonBody,
+            })
+        else
+            HttpService:PostAsync(webhookUrl, jsonBody, Enum.HttpContentType.ApplicationJson)
+        end
+    end)
+
+    return ok, err
+end
+
+local function formatDuration(durationSeconds)
+    durationSeconds = math.floor(durationSeconds + 0.5)
+    local hours = math.floor(durationSeconds / 3600)
+    local minutes = math.floor((durationSeconds % 3600) / 60)
+    local seconds = durationSeconds % 60
+    if hours > 0 then
+        return string.format("%dj %dm %ds", hours, minutes, seconds)
+    else
+        return string.format("%dm %ds", minutes, seconds)
+    end
+end
+
+local function sendTargetReachedWebhook(webhookUrl, petData, targetUUID, targetLevel, durationSeconds)
+    if not webhookUrl or webhookUrl == "" then
+        return
+    end
+
+    local petName = (petData and petData.name) or "Unknown"
+    local petMutation = (petData and petData.mutation) or "Normal"
+    local petLevel = (petData and petData.level) or targetLevel
+
+    local payload = {
+        embeds = {
+            {
+                title = "🎯 Target Level Tercapai!",
+                color = 3066993,
+                fields = {
+                    { name = "Pet", value = tostring(petMutation) .. " " .. tostring(petName), inline = true },
+                    { name = "UUID", value = tostring(targetUUID), inline = true },
+                    { name = "Level Tercapai", value = tostring(petLevel) .. " / " .. tostring(targetLevel), inline = true },
+                    { name = "Lama Pengerjaan", value = formatDuration(durationSeconds), inline = false },
+                },
+            }
+        }
+    }
+
+    local ok, jsonBody = pcall(function()
+        return HttpService:JSONEncode(payload)
+    end)
+    if not ok then
+        warn("⚠️ Gagal encode payload webhook: " .. tostring(jsonBody))
+        return
+    end
+
+    local sent, err = sendWebhookRaw(webhookUrl, jsonBody)
+    if sent then
+        debugStep("Webhook terkirim: target level tercapai (" .. formatDuration(durationSeconds) .. ")")
+    else
+        warn("⚠️ Gagal mengirim webhook: " .. tostring(err))
+    end
+end
 
 -- ============================================================
 -- 8G. FUNGSI SCAN & COLLECT PER POHON
@@ -1142,6 +1265,7 @@ end
 
 -- ============================================================
 -- 8H. SHOVEL BUAH MUTASI < threshold (LANGKAH 5 - SHOVEL BUKAN COLLECT)
+--     FIX: multi-pass agar tuntas untuk pohon dengan banyak buah (40+)
 -- ============================================================
 local function shovelLowMutationFruitsOnTree(treeName, threshold)
     if not RemoveItemRemote then
@@ -1160,18 +1284,25 @@ local function shovelLowMutationFruitsOnTree(treeName, threshold)
     end
     debugStep("Langkah 5: shovel di-equip untuk menghapus buah mutasi < " .. threshold)
 
-    local fruits = scanFruitsOnTree(treeName)
-    local toShovel = {}
-    for _, p in ipairs(fruits) do
-        if p.mutCount < threshold then
-            table.insert(toShovel, p.instance)
+    for pass = 1, SHOVEL_MAX_PASSES do
+        local fruits = scanFruitsOnTree(treeName)
+        local toShovel = {}
+        for _, p in ipairs(fruits) do
+            if p.mutCount < threshold then
+                table.insert(toShovel, p.instance)
+            end
         end
-    end
 
-    if #toShovel == 0 then
-        debugStep("Langkah 5: tidak ada buah di " .. treeName .. " dengan mutasi < " .. threshold)
-    else
-        debugStep("Langkah 5: menemukan " .. #toShovel .. " buah dengan mutasi < " .. threshold .. ", mulai shovel...")
+        if #toShovel == 0 then
+            if pass == 1 then
+                debugStep("Langkah 5: tidak ada buah di " .. treeName .. " dengan mutasi < " .. threshold)
+            else
+                debugStep("Langkah 5: sudah bersih, semua buah di " .. treeName .. " dengan mutasi < " .. threshold .. " berhasil dishovel (pass " .. pass .. ")")
+            end
+            break
+        end
+
+        debugStep("Langkah 5: pass " .. pass .. "/" .. SHOVEL_MAX_PASSES .. " - menemukan " .. #toShovel .. " buah dengan mutasi < " .. threshold .. ", mulai shovel...")
         for i, fruit in ipairs(toShovel) do
             local ok, err = pcall(function()
                 RemoveItemRemote:FireServer(fruit)
@@ -1183,7 +1314,9 @@ local function shovelLowMutationFruitsOnTree(treeName, threshold)
             end
             task.wait(0.3)
         end
-        debugStep("Langkah 5: selesai shovel " .. #toShovel .. " buah")
+        debugStep("Langkah 5: selesai shovel " .. #toShovel .. " buah pada pass " .. pass)
+
+        task.wait(0.7)
     end
 
     local backpack = LocalPlayer:FindFirstChild("Backpack")
@@ -1195,39 +1328,27 @@ local function shovelLowMutationFruitsOnTree(treeName, threshold)
 end
 
 -- ============================================================
--- 8I. UNFAVORITE ANY FAVORED FRUIT (Langkah 1)
+-- 8I. UNFAVORITE TARGET BUAH SEBELUMNYA (Langkah 1)
+-- FIX: TIDAK LAGI mencari & unfavorite SEMBARANG buah favorit di garden,
+-- karena itu bisa ikut meng-unfavorite buah cadangan mutasi milik user
+-- yang sengaja difavoritkan secara manual. Sekarang HANYA meng-unfavorite
+-- instance spesifik yang difavoritkan oleh script itu sendiri di Langkah 4
+-- pada iterasi sebelumnya (jika ada).
 -- ============================================================
-local function findFavoredFruitInGarden()
-    for _, p in ipairs(scanAllPlants()) do
-        local instance = p.instance
-        if instance then
-            local isFavored = instance:GetAttribute("Favorited") == true
-                or instance:GetAttribute("Favorite") == true
-                or instance:GetAttribute("Favored") == true
-            if isFavored then
-                return instance
-            end
-        end
-    end
-    return nil
-end
-
-local function unfavoriteAnyFavoredFruit()
-    local favored = findFavoredFruitInGarden()
-    if favored then
-        debugStep("Langkah 1: ditemukan buah favorit di garden, akan di-unfavorite")
-        local success = setFruitFavorite(favored, false)
-        if success then
-            debugStep("Langkah 1: berhasil unfavorite buah")
-        else
-            debugStep("Langkah 1: GAGAL unfavorite buah")
-        end
-        task.wait(0.3)
-        return success
-    else
-        debugStep("Langkah 1: tidak ada buah favorit di garden, lewati")
+local function unfavoritePreviousTargetFruit(previousInstance)
+    if not previousInstance then
+        debugStep("Langkah 1: tidak ada buah target sebelumnya, lewati (buah favorit lain/cadangan mutasi tidak disentuh)")
         return false
     end
+    debugStep("Langkah 1: unfavorite buah target sebelumnya (buah favorit lain/cadangan mutasi tidak disentuh)")
+    local success = setFruitFavorite(previousInstance, false)
+    if success then
+        debugStep("Langkah 1: berhasil unfavorite buah target sebelumnya")
+    else
+        debugStep("Langkah 1: GAGAL unfavorite buah target sebelumnya")
+    end
+    task.wait(0.3)
+    return success
 end
 
 -- ============================================================
@@ -1302,13 +1423,15 @@ function startLeveling()
                     debugStep(string.format("Level target: %d/%d", currentLevel, targetLevel))
 
                     local favoritedFruitInstance = nil
+                    local targetStartTime = tick()
 
                     while isLevelingRunning and currentLevel < targetLevel do
 
                         -- ===== LANGKAH 1 =====
-                        debugStep("Langkah 1: unfavorite buah favorit (jika ada)")
-                        if statusLabel then statusLabel:SetDesc("Status: Bersihkan buah favorit...") end
-                        unfavoriteAnyFavoredFruit()
+                        debugStep("Langkah 1: unfavorite buah target sebelumnya (jika ada)")
+                        if statusLabel then statusLabel:SetDesc("Status: Bersihkan buah target sebelumnya...") end
+                        unfavoritePreviousTargetFruit(favoritedFruitInstance)
+                        favoritedFruitInstance = nil
                         if not isLevelingRunning then break end
 
                         -- ===== LANGKAH 2 =====
@@ -1385,17 +1508,22 @@ function startLeveling()
                         if not isLevelingRunning then break end
 
                         -- ===== LANGKAH 6 =====
-                        debugStep("Langkah 6: equip Anubis + Target, tunggu buah di " .. tree .. " <= 10 mutasi (kecuali favorit)")
+                        debugStep("Langkah 6: equip Anubis + Target, tunggu buah di " .. tree .. " <= 10 mutasi (kecuali favorit), timeout " .. ANUBIS_TIMEOUT_SECONDS .. " detik")
                         if statusLabel then statusLabel:SetDesc("Status: Equip Anubis + Target...") end
                         local anubisAndTarget = {}
                         for _, uuid in ipairs(anubis) do table.insert(anubisAndTarget, uuid) end
                         table.insert(anubisAndTarget, targetUUID)
                         equipPetListTogether(anubisAndTarget)
 
+                        local anubisStartTime = tick()
                         while isLevelingRunning do
                             local remaining = countFruitsOnTreeWithMutationAbove(tree, 10, favoritedFruitInstance)
                             if remaining <= 0 then
                                 debugStep("Langkah 6: semua buah di " .. tree .. " sudah <= 10 mutasi (kecuali favorit)")
+                                break
+                            end
+                            if (tick() - anubisStartTime) >= ANUBIS_TIMEOUT_SECONDS then
+                                debugStep("Langkah 6: timeout " .. ANUBIS_TIMEOUT_SECONDS .. " detik tercapai, masih ada " .. remaining .. " buah > 10 mutasi, lanjut ke Langkah 7")
                                 break
                             end
                             task.wait(1)
@@ -1415,6 +1543,8 @@ function startLeveling()
 
                         if currentLevel >= targetLevel then
                             debugStep("✅ Target level tercapai! Unequip target dan lanjut.")
+                            local elapsed = tick() - targetStartTime
+                            sendTargetReachedWebhook(currentWebhookUrl, petDataNow, targetUUID, targetLevel, elapsed)
                             unequipPetByUUID(targetUUID)
                             for _, uuid in ipairs(anubis) do
                                 unequipPetByUUID(uuid)
@@ -1490,6 +1620,7 @@ ConfigSection:Button({
         targetLevelInput:SetValue(tostring(MyConfig:Get("target_level") or 500))
         mutationCountInput:SetValue(tostring(MyConfig:Get("mutation_count") or 1))
         collectThresholdInput:SetValue(tostring(MyConfig:Get("collect_threshold") or 10))
+        webhookInput:SetValue(tostring(MyConfig:Get("webhook_url") or ""))
         autoToggle:Set(MyConfig:Get("auto_leveling") or false)
         espToggle:Set(MyConfig:Get("esp_mutation") or false)
         autoBuyToggle:Set(MyConfig:Get("auto_buy_fav_tool") or false)
